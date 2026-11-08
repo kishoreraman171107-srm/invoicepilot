@@ -1,0 +1,9 @@
+{
+  "name": "invoicepilot",
+  "version": "1.0.0",
+  "description": "AI agent that creates PayPal invoices from a sentence and chases late payments",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "dotenv": "^16.4.5", "express": "^4.19.2" }
+}

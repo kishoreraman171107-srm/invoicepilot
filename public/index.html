@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InvoicePilot</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.3/styles/ag-grid.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.3/styles/ag-theme-quartz.css">
+<style>
+:root{--ink:#16202e;--mut:#5b6678;--bg:#f5f7fb;--card:#fff;--line:#dde3ee;--blue:#1456d8;--ok:#1e7f52;--warn:#a86a00;--bad:#c2362b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:32px 20px 64px}
+h1{font:700 2.2rem/1.1 "Bricolage Grotesque",sans-serif;margin:0 0 6px}
+.sub{color:var(--mut);margin:0 0 24px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+textarea{width:100%;min-height:64px;border:1px solid var(--line);border-radius:8px;padding:12px;font:inherit;resize:vertical}
+button{background:var(--blue);color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:.95rem;font-family:inherit;cursor:pointer}
+button.ghost{background:#fff;color:var(--blue);border:1px solid var(--blue)}
+button:disabled{opacity:.5}
+button:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid #9db9f5;outline-offset:2px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.stats div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.stats b{display:block;font:700 1.7rem "Bricolage Grotesque",sans-serif}
+.stats span{color:var(--mut);font-size:.9rem}
+#log{white-space:pre-wrap;font-size:.92rem;color:var(--mut);min-height:24px}
+#msg{white-space:pre-wrap;background:var(--bg);border-radius:8px;padding:12px;margin-top:8px;font-size:.92rem}
+.s-PAID{color:var(--ok);font-weight:500}.s-PENDING{color:var(--warn);font-weight:500}.s-OVERDUE{color:var(--bad);font-weight:500}
+@media(max-width:600px){.stats{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <h1>InvoicePilot</h1>
+  <p class="sub">Describe the job in one sentence. The agent creates a PayPal payment request and chases the payment for you.</p>
+
+  <div class="box">
+    <textarea id="text" aria-label="Invoice request" placeholder="Invoice Ravi for $150 for logo design, due in 7 days"></textarea>
+    <p><button id="go">Create invoice</button> <button id="refresh" class="ghost">Check payments</button></p>
+    <div id="log" aria-live="polite"></div>
+    <div id="msg" hidden></div>
+  </div>
+
+  <div class="stats">
+    <div><b id="earned">0</b><span>Earned</span></div>
+    <div><b id="pending">0</b><span>Waiting to be paid</span></div>
+    <div><b id="overdue">0</b><span>Overdue</span></div>
+  </div>
+  <div class="box"><span id="insight">Your AI summary will appear here.</span></div>
+  <div id="grid" class="ag-theme-quartz"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.3/dist/ag-grid-community.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const log = t => $('#log').textContent = t;
+let ROWS = [];
+async function api(url, body) {
+  const r = await fetch(url, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error);
+  return j;
+}
+const grid = agGrid.createGrid($('#grid'), {
+  domLayout: 'autoHeight', rowData: [],
+  columnDefs: [
+    { field: 'number', headerName: 'Invoice', width: 110 },
+    { field: 'client', flex: 1, minWidth: 130 },
+    { field: 'amount', width: 120, valueFormatter: p => p.data.currency + ' ' + p.value.toFixed(2) },
+    { field: 'due', width: 115 },
+    { field: 'status', width: 110, cellClass: p => 's-' + p.value },
+    { headerName: 'Actions', width: 270, cellRenderer: p => p.data.status === 'PAID' ? '' :
+      `<button onclick="chase('${p.data.id}')">AI chase</button> <button class="ghost" onclick="copyLink('${p.data.id}')">Copy pay link</button>` }
+  ]
+});
+async function refresh(withInsight = true) {
+  const rows = await api('/api/invoices');
+  ROWS = rows;
+  grid.setGridOption('rowData', rows);
+  const sum = s => rows.filter(r => r.status === s).reduce((a, r) => a + r.amount, 0).toFixed(2);
+  $('#earned').textContent = sum('PAID'); $('#pending').textContent = sum('PENDING'); $('#overdue').textContent = sum('OVERDUE');
+  if (withInsight && rows.length) api('/api/insight', { rows }).then(j => $('#insight').textContent = j.text).catch(() => {});
+}
+$('#go').onclick = async () => {
+  const btn = $('#go'); btn.disabled = true;
+  try {
+    log('Reading your request...');
+    const d = await api('/api/parse', { text: $('#text').value });
+    log(`Creating PayPal payment request: ${d.client_name}, ${d.currency} ${d.amount}, "${d.description}"...`);
+    const r = await api('/api/invoices', d);
+    log('Invoice created. Use "Copy pay link" to send it to your client.');
+    $('#text').value = ''; await refresh();
+  } catch (e) { log('Something went wrong: ' + e.message); }
+  btn.disabled = false;
+};
+$('#refresh').onclick = async () => {
+  try { log('Checking PayPal for payments...'); await refresh(); log('Payments checked.'); }
+  catch (e) { log('Something went wrong: ' + e.message); }
+};
+async function copyLink(id) {
+  const r = ROWS.find(x => x.id === id);
+  try { await navigator.clipboard.writeText(r.link); log('Pay link copied. Open it to pay as the client.'); }
+  catch { log('Copy failed. Pay link: ' + r.link); }
+}
+async function chase(id) {
+  try {
+    log('Agent is deciding how to follow up...');
+    const m = await api('/api/chase/' + id, {});
+    const body = m.note + '\n\nPay securely with PayPal: ' + m.link;
+    log(`Agent chose a ${m.tone} tone: ${m.reason}`);
+    const box = $('#msg'); box.hidden = false; box.textContent = 'Subject: ' + m.subject + '\n\n' + body + '\n\n';
+    const a = document.createElement('a');
+    a.href = 'mailto:' + encodeURIComponent(m.email || '') + '?subject=' + encodeURIComponent(m.subject) + '&body=' + encodeURIComponent(body);
+    a.textContent = 'Open in email app'; box.appendChild(a);
+  } catch (e) { log('Could not prepare the follow-up: ' + e.message); }
+}
+refresh().catch(e => log('Setup needed: ' + e.message));
+setInterval(() => refresh(false).catch(() => {}), 20000);
+</script>
+</body>
+</html>
